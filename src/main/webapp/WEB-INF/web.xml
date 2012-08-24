@@ -3,11 +3,11 @@
  "http://java.sun.com/dtd/web-app_2_3.dtd" >
 
 <web-app>
-  <display-name>Archetype Created Web Application</display-name>
+  <display-name>Sample ProxyServlet Use</display-name>
 
     <servlet>
         <servlet-name>ProxyServlet</servlet-name>
-        <servlet-class>io.bicycle.ProxyServlet</servlet-class>
+        <servlet-class>io.bicycle.proxy.ProxyServlet</servlet-class>
 
         <!-- Optional -->
         <!--

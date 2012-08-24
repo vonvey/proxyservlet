@@ -4,9 +4,9 @@
     <groupId>proxyservlet</groupId>
     <artifactId>proxyservlet</artifactId>
     <packaging>war</packaging>
-    <version>1.0</version>
-    <name>proxyservlet Maven Webapp</name>
-    <url>http://maven.apache.org</url>
+    <version>1.0-SNAPSHOT</version>
+    <name>Proxy Servlet</name>
+    <url>https://github.com/bicycleio/proxyservlet</url>
     <dependencies>
         <dependency>
             <groupId>junit</groupId>
@@ -14,12 +14,14 @@
             <version>4.10</version>
             <scope>test</scope>
         </dependency>
+
         <dependency>
             <groupId>javax.servlet</groupId>
             <artifactId>servlet-api</artifactId>
             <version>2.5</version>
             <scope>provided</scope>
         </dependency>
+
         <dependency>
             <groupId>commons-httpclient</groupId>
             <artifactId>commons-httpclient</artifactId>
@@ -30,6 +32,12 @@
             <groupId>commons-fileupload</groupId>
             <artifactId>commons-fileupload</artifactId>
             <version>1.2.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>13.0</version>
         </dependency>
 
     </dependencies>

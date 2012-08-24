@@ -1,21 +1,8 @@
-package io.bicycle;
+package io.bicycle.proxy;
 
 
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Enumeration;
-import java.util.List;
-import java.util.Map;
-
-import javax.servlet.ServletConfig;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServlet;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
-
+import com.google.common.collect.Lists;
+import com.google.common.io.ByteStreams;
 import org.apache.commons.fileupload.FileItem;
 import org.apache.commons.fileupload.FileUploadException;
 import org.apache.commons.fileupload.disk.DiskFileItemFactory;
@@ -26,11 +13,20 @@ import org.apache.commons.httpclient.HttpMethod;
 import org.apache.commons.httpclient.NameValuePair;
 import org.apache.commons.httpclient.methods.GetMethod;
 import org.apache.commons.httpclient.methods.PostMethod;
-import org.apache.commons.httpclient.methods.multipart.ByteArrayPartSource;
-import org.apache.commons.httpclient.methods.multipart.FilePart;
-import org.apache.commons.httpclient.methods.multipart.MultipartRequestEntity;
-import org.apache.commons.httpclient.methods.multipart.Part;
-import org.apache.commons.httpclient.methods.multipart.StringPart;
+import org.apache.commons.httpclient.methods.multipart.*;
+
+import javax.servlet.ServletConfig;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.File;
+import java.io.IOException;
+import java.util.Enumeration;
+import java.util.List;
+import java.util.Map;
+
+import static com.google.common.base.Strings.isNullOrEmpty;
 
 
 public class ProxyServlet extends HttpServlet {
@@ -42,68 +38,45 @@ public class ProxyServlet extends HttpServlet {
 
     private static final File FILE_UPLOAD_TEMP_DIRECTORY = new File(System.getProperty("java.io.tmpdir"));
 
-    // Proxy host params
+    // 5MB
+    private static final int DEFAULT_MAX_FILE_UPLOAD_SIZE = 5 * 1024 * 1024;
 
-    /**
-     * The (optional) protocol http, or https
-     */
-    private String proxyProtocol;
 
-    /**
-     * The host to which we are proxying requests
-     */
-    private String proxyHost;
-    /**
-     * The port on the proxy host to which we are proxying requests. Default value is 80.
-     */
-    private int proxyPort = 80;
-    /**
-     * The (optional) path on the proxy host to which we are proxying requests. Default value is "".
-     */
-    private String proxyPath = "";
-    /**
-     * The maximum size for uploaded files in bytes. Default value is 5MB.
-     */
-    private int maxFileUploadSize = 5 * 1024 * 1024;
+    private ProxyTarget proxyTarget;
+    private int maxFileUploadSize = DEFAULT_MAX_FILE_UPLOAD_SIZE;
 
     public String getServletInfo() {
         return "ProxyServlet";
     }
 
     /**
-     * Initialize the <code>io.bicycle.ProxyServlet</code>
+     * Initialize the <code>io.bicycle.proxy.ProxyServlet</code>
      *
      * @param servletConfig The Servlet configuration passed in by the servlet container
      */
     public void init(final ServletConfig servletConfig) {
 
-        final String protocol = servletConfig.getInitParameter("proxyProtocol");
-        if ("https".equalsIgnoreCase(protocol)) {
-            this.setProxyProtocol(protocol);
-        } else {
-            this.setProxyProtocol(protocol);
-        }
+        final String protocol = "https".equalsIgnoreCase(servletConfig.getInitParameter("proxyProtocol")) ? "https" : "http";
 
-        // Get the proxy host
-        String stringProxyHostNew = servletConfig.getInitParameter("proxyHost");
-        if (stringProxyHostNew == null || stringProxyHostNew.length() == 0) {
+        final String stringProxyHostNew = servletConfig.getInitParameter("proxyHost");
+        if (isNullOrEmpty(stringProxyHostNew)) {
             throw new IllegalArgumentException("Proxy host not set, please set init-param 'proxyHost' in web.xml");
         }
-        this.setProxyHost(stringProxyHostNew);
-        // Get the proxy port if specified
-        String stringProxyPortNew = servletConfig.getInitParameter("proxyPort");
-        if (stringProxyPortNew != null && stringProxyPortNew.length() > 0) {
-            this.setProxyPort(Integer.parseInt(stringProxyPortNew));
+        final String configProxyPort = servletConfig.getInitParameter("proxyPort");
+        int proxyPort = "https".equals(protocol) ? 443 : 80;
+        if (!isNullOrEmpty(configProxyPort)) {
+            proxyPort = Integer.parseInt(configProxyPort);
         }
         // Get the proxy path if specified
-        String stringProxyPathNew = servletConfig.getInitParameter("proxyPath");
-        if (stringProxyPathNew != null && stringProxyPathNew.length() > 0) {
-            this.setProxyPath(stringProxyPathNew);
-        }
+        final String stringProxyPathNew =
+                !isNullOrEmpty(servletConfig.getInitParameter("proxyPath")) ? servletConfig.getInitParameter("proxyPath") : "";
+
+        this.proxyTarget = new ProxyTarget(protocol, stringProxyHostNew, proxyPort, stringProxyPathNew);
+
         // Get the maximum file upload size if specified
-        String stringMaxFileUploadSize = servletConfig.getInitParameter("maxFileUploadSize");
-        if (stringMaxFileUploadSize != null && stringMaxFileUploadSize.length() > 0) {
-            this.setMaxFileUploadSize(Integer.parseInt(stringMaxFileUploadSize));
+        final String stringMaxFileUploadSize = servletConfig.getInitParameter("maxFileUploadSize");
+        if (!isNullOrEmpty(stringMaxFileUploadSize)) {
+            this.maxFileUploadSize = Integer.parseInt(stringMaxFileUploadSize);
         }
     }
 
@@ -161,13 +134,13 @@ public class ProxyServlet extends HttpServlet {
     private void handleMultipartPost(final PostMethod postMethodProxyRequest, final HttpServletRequest httpServletRequest)
             throws ServletException {
         final DiskFileItemFactory diskFileItemFactory = new DiskFileItemFactory();
-        diskFileItemFactory.setSizeThreshold(this.getMaxFileUploadSize());
+        diskFileItemFactory.setSizeThreshold(this.maxFileUploadSize);
         diskFileItemFactory.setRepository(FILE_UPLOAD_TEMP_DIRECTORY);
 
         final ServletFileUpload servletFileUpload = new ServletFileUpload(diskFileItemFactory);
         try {
             final List<FileItem> listFileItems = (List<FileItem>) servletFileUpload.parseRequest(httpServletRequest);
-            final List<Part> listParts = new ArrayList<Part>();
+            final List<Part> listParts = Lists.newArrayList();
             for (FileItem fileItemCurrent : listFileItems) {
                 if (fileItemCurrent.isFormField()) {
                     listParts.add(new StringPart(fileItemCurrent.getFieldName(), fileItemCurrent.getString()));
@@ -207,7 +180,7 @@ public class ProxyServlet extends HttpServlet {
     @SuppressWarnings("unchecked")
     private void handleStandardPost(PostMethod postMethodProxyRequest, HttpServletRequest httpServletRequest) {
         final Map<String, String[]> postParameters = (Map<String, String[]>) httpServletRequest.getParameterMap();
-        final List<NameValuePair> listNameValuePairs = new ArrayList<NameValuePair>();
+        final List<NameValuePair> listNameValuePairs = Lists.newArrayList();
         for (Map.Entry<String, String[]> parameterKeyAndValues : postParameters.entrySet()) {
             for (String parameterValue : parameterKeyAndValues.getValue()) {
                 listNameValuePairs.add(new NameValuePair(parameterKeyAndValues.getKey(), parameterValue));
@@ -253,7 +226,7 @@ public class ProxyServlet extends HttpServlet {
                 myHostName += ":" + httpServletRequest.getServerPort();
             }
             myHostName += httpServletRequest.getContextPath();
-            httpServletResponse.sendRedirect(location.replace(getProxyHostAndPort() + this.getProxyPath(), myHostName));
+            httpServletResponse.sendRedirect(location.replace(this.proxyTarget.getProxyHostAndPort() + this.proxyTarget.getProxyPath(), myHostName));
             return;
         } else if (proxyResponseCode == HttpServletResponse.SC_NOT_MODIFIED) {
             // 304 needs special handling.  See:
@@ -276,13 +249,7 @@ public class ProxyServlet extends HttpServlet {
         }
 
         // Send the content to the client
-        final BufferedInputStream bufferedInputStream =
-                new BufferedInputStream(httpMethodProxyRequest.getResponseBodyAsStream());
-        OutputStream outputStreamClientResponse = httpServletResponse.getOutputStream();
-        int intNextByte;
-        while ((intNextByte = bufferedInputStream.read()) != -1) {
-            outputStreamClientResponse.write(intNextByte);
-        }
+        ByteStreams.copy(httpMethodProxyRequest.getResponseBodyAsStream(), httpServletResponse.getOutputStream());
     }
 
     /**
@@ -306,14 +273,14 @@ public class ProxyServlet extends HttpServlet {
             //		as several headers each with a different value rather than
             //		sending the header as a comma separated list.
             // Thus, we get an Enumeration of the header values sent by the client
-            final Enumeration enumerationOfHeaderValues = httpServletRequest.getHeaders(headerName);
+            final Enumeration<String> enumerationOfHeaderValues = httpServletRequest.getHeaders(headerName);
             while (enumerationOfHeaderValues.hasMoreElements()) {
-                String stringHeaderValue = (String) enumerationOfHeaderValues.nextElement();
+                String stringHeaderValue = enumerationOfHeaderValues.nextElement();
                 // In case the proxy host is running multiple virtual servers,
                 // rewrite the Host header to ensure that we get content from
                 // the correct virtual server
                 if (headerName.equalsIgnoreCase(HEADER_HOST_NAME)) {
-                    stringHeaderValue = getProxyHostAndPort();
+                    stringHeaderValue = this.proxyTarget.getProxyHostAndPort();
                 }
                 Header header = new Header(headerName, stringHeaderValue);
                 // Set the same header on the proxy request
@@ -323,14 +290,8 @@ public class ProxyServlet extends HttpServlet {
     }
 
     private String createProxyUrl(final HttpServletRequest httpServletRequest) {
+        String proxyUrl = this.proxyTarget.getProxyBaseURl() + httpServletRequest.getPathInfo();
 
-        String proxyUrl = this.getProxyProtocol() + "://" + this.getProxyHostAndPort();
-        // Check if we are proxying to a path other that the document root
-        if (!this.getProxyPath().equalsIgnoreCase("")) {
-            proxyUrl += this.getProxyPath();
-        }
-        // Handle the path given to the servlet
-        proxyUrl += httpServletRequest.getPathInfo();
         // Handle the query string
         if (httpServletRequest.getQueryString() != null) {
             proxyUrl += "?" + httpServletRequest.getQueryString();
@@ -338,52 +299,4 @@ public class ProxyServlet extends HttpServlet {
         return proxyUrl;
     }
 
-    private String getProxyHostAndPort() {
-        if (this.getProxyPort() == 80 || this.getProxyPort() == 443) {
-            return this.getProxyHost();
-        } else {
-            return this.getProxyHost() + ":" + this.getProxyPort();
-        }
-    }
-
-    public String getProxyProtocol() {
-        return proxyProtocol;
-    }
-
-    private void setProxyProtocol(String protocol) {
-        this.proxyProtocol = protocol;
-    }
-
-
-    private String getProxyHost() {
-        return this.proxyHost;
-    }
-
-    private void setProxyHost(String stringProxyHostNew) {
-        this.proxyHost = stringProxyHostNew;
-    }
-
-    private int getProxyPort() {
-        return this.proxyPort;
-    }
-
-    private void setProxyPort(int intProxyPortNew) {
-        this.proxyPort = intProxyPortNew;
-    }
-
-    private String getProxyPath() {
-        return this.proxyPath;
-    }
-
-    private void setProxyPath(String stringProxyPathNew) {
-        this.proxyPath = stringProxyPathNew;
-    }
-
-    private int getMaxFileUploadSize() {
-        return this.maxFileUploadSize;
-    }
-
-    private void setMaxFileUploadSize(int intMaxFileUploadSizeNew) {
-        this.maxFileUploadSize = intMaxFileUploadSizeNew;
-    }
 }
